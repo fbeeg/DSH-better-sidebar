@@ -169,7 +169,13 @@ describe('sidechat.start', () => {
     // The fork-marker pair is load-bearing: without it the child's Inbox
     // replays the parent's seed inbox splices and inherits whatever input sat
     // unclaimed in the parent (see sidechat-seed-validation.spec.ts).
-    expect(options.inheritedEventCount).toBe(options.seed.length)
+    // The cut is the parent prefix: the marker sits AT the cut and the
+    // descriptor is the child's first own event after it.
+    expect(options.inheritedEventCount).toBe(options.seed.length - 2)
+    expect(options.seed[options.inheritedEventCount]).toMatchObject({
+      type: 'session/end-seed',
+      data: { inherited: true },
+    })
     expect(options.agentOptions).toEqual({ provider: 'test', model: 'model-x' })
     // The child carries the parent's completed turns as a verbatim seed,
     // closed by the durable subagent descriptor (honest catalog citizenship:
@@ -177,7 +183,7 @@ describe('sidechat.start', () => {
     // 'corrupt' diagnostic row).
     expect(options.seed.map(event => event.type)).toEqual([
       'user/message', 'turn/start', 'step/start', 'assistant/message', 'step/end', 'turn/end',
-      'subagent/descriptor',
+      'session/end-seed', 'subagent/descriptor',
     ])
     expect(options.seed.at(-1)?.data).toMatchObject({
       // The descriptor version is stamped by the host package's
@@ -235,9 +241,9 @@ describe('sidechat.start', () => {
     const options = services.create.mock.calls[0]![0] as { seed: Array<{ type: string; data: Record<string, unknown> }> }
     expect(options.seed.map(event => event.type)).toEqual([
       'user/message', 'turn/start', 'step/start', 'step/end', 'turn/end',
-      'subagent/descriptor',
+      'session/end-seed', 'subagent/descriptor',
     ])
-    expect(options.seed.at(-2)?.data).toEqual({ turn: 1, reason: { kind: 'interrupted' } })
+    expect(options.seed.at(-3)?.data).toEqual({ turn: 1, reason: { kind: 'interrupted' } })
   })
 
   it('falls back to the snapshot when a tool call is still executing', async () => {
@@ -257,7 +263,7 @@ describe('sidechat.start', () => {
 
     const options = services.create.mock.calls[0]![0] as { seed: Array<{ type: string }> }
     // Cut BEFORE the open turn: only the pending user message is inherited.
-    expect(options.seed.map(event => event.type)).toEqual(['user/message', 'subagent/descriptor'])
+    expect(options.seed.map(event => event.type)).toEqual(['user/message', 'session/end-seed', 'subagent/descriptor'])
     // The snapshot rides the injection, not the follow-up question.
     const injection = child.inject.mock.calls[0]![0] as { content: Array<{ text: string }> }
     expect(injection.content[0]!.text).toContain('`bash` (executing)')
@@ -281,14 +287,14 @@ describe('sidechat.start', () => {
     const { childId } = await api['sidechat.start']({ sessionId: 'parent', question: '   ' })
 
     // The empty thread carries the same fork-marker pair (isSeeded +
-    // inheritedEventCount = seed length) as the prompted create.
+    // inheritedEventCount = the parent prefix) as the prompted create.
     const options = services.create.mock.calls[0]![0] as {
       meta: Record<string, unknown>
       seed: readonly { type: string }[]
       inheritedEventCount: number
     }
     expect(options.meta.isSeeded).toBe(true)
-    expect(options.inheritedEventCount).toBe(options.seed.length)
+    expect(options.inheritedEventCount).toBe(options.seed.length - 2)
 
     // No prompt yet: the composer owns the first message; the placeholder
     // label is pinned and the in-progress snapshot is parked for it.

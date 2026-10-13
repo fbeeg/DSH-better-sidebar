@@ -15,9 +15,10 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { Context } from '@deepseek-ai/cordis'
 import type { InboxState } from '@deepseek-ai/dsh-agent'
-import { snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
+import { foldSubagentDescriptor, snapshotSubagentDescriptor } from '@deepseek-ai/dsh-subagent'
 import type { SidebarSessionEvent } from '../src/context-types.ts'
 import { buildSidechatInheritance } from '../src/sidechat-core.ts'
+import { buildSidechatApi } from '../src/sidechat-routes.ts'
 
 /** One live-style event with the surface marker message events carry, and
  *  the REAL message shapes the validator demands (id/role/source/content;
@@ -220,6 +221,76 @@ describe('sidechat seed against the real dsh-session validator', () => {
     const types = child.snapshotEvents().map(event => event.type)
     expect(types.at(-2)).toBe('subagent/descriptor')
     expect(types.at(-1)).toBe('session/end-seed')
+  })
+})
+
+describe('sidechat seed vs the host descriptor reader', () => {
+  /** What the sidebar's route passes to `agents.create`, built from the real
+   *  routes with a recording `agents.create`. */
+  async function routeSeed(events: SidebarSessionEvent[]): Promise<{
+    seed: SidebarSessionEvent[]
+    inheritedEventCount: number
+  }> {
+    let captured: { seed: SidebarSessionEvent[]; inheritedEventCount: number } | undefined
+    const child = {
+      id: 'child',
+      options: { provider: 'test', model: 'model-x' },
+      ctx: { on: () => () => {} },
+      session: { id: 'child', snapshotEvents: () => [], header: {}, inheritedEventCount: 0 },
+      inbox: { clear: () => {}, nextTurn: [], nextStep: [] },
+      inject: () => {},
+      followup: () => {},
+    }
+    const parent = {
+      id: 'parent',
+      options: { provider: 'test', model: 'model-x' },
+      session: {
+        id: 'parent',
+        header: { cwd: '/p', delegationDepth: 0 },
+        snapshotEvents: () => events,
+        inheritedEventCount: 0,
+      },
+    }
+    const services: Record<string, unknown> = {
+      agents: {
+        get: (id: string) => (id === 'child' ? child : parent),
+        create: async (options: { seed: SidebarSessionEvent[]; inheritedEventCount: number }) => {
+          captured = { seed: options.seed, inheritedEventCount: options.inheritedEventCount }
+          return { agent: child, dispose: async () => {} }
+        },
+      },
+    }
+    const api = buildSidechatApi({ get: (key: string) => services[key] } as never)
+    await api['sidechat.start']({ sessionId: 'parent', question: '' })
+    if (captured === undefined) throw new Error('agents.create was not called')
+    return captured
+  }
+
+  it('is accepted by the real session constructor with the cut at the parent prefix', async () => {
+    const { seed, inheritedEventCount } = await routeSeed(parentLog())
+    const child = Session.create(
+      'session-descriptor-cut' as SessionId,
+      seed as never,
+      { version: SESSION_FORMAT_VERSION, id: 'session-descriptor-cut' as SessionId, createdAt: Date.now(), isSeeded: true },
+      SessionLogOffset(inheritedEventCount),
+    )
+    expect(child.inheritedEventCount).toBe(inheritedEventCount)
+    // Only the cut marker and the descriptor are the child's own events.
+    expect(child.ownEvents().map(event => event.type)).toEqual(['session/end-seed', 'subagent/descriptor'])
+  })
+
+  it("lets the host's descriptor reader find the descriptor in the child's own events", async () => {
+    const { seed, inheritedEventCount } = await routeSeed(parentLog())
+    const child = Session.create(
+      'session-descriptor-fold' as SessionId,
+      seed as never,
+      { version: SESSION_FORMAT_VERSION, id: 'session-descriptor-fold' as SessionId, createdAt: Date.now(), isSeeded: true },
+      SessionLogOffset(inheritedEventCount),
+    )
+    // The host's cold resume and activity labels fold the descriptor from the
+    // events at or after the inherited cut (`events.slice(inheritedEventCount)`).
+    const found = foldSubagentDescriptor(child.snapshotEvents().slice(child.inheritedEventCount) as never)
+    expect(found).toMatchObject({ mode: 'continuable', provider: 'sidechat' })
   })
 })
 

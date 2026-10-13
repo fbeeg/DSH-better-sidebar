@@ -564,13 +564,25 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
         ...(routeProvider === undefined ? {} : { agentProvider: routeProvider }),
         ...(routeModel === undefined ? {} : { agentModel: routeModel }),
       })
+      // The host reads a child's own descriptor from the events AT OR AFTER
+      // the inherited cut (cold resume, activity labels), the way a host-made
+      // fork does: the descriptor is the child's first own event. So the cut
+      // is the parent prefix, marked by the same `session/end-seed` event the
+      // session constructor itself would append, and the descriptor follows it.
+      const cut = inheritance.seed.length
+      const cutMarker: SeedEvent = {
+        type: 'session/end-seed',
+        seq: cut,
+        time: Date.now(),
+        data: { inherited: true },
+      }
       const descriptorEvent: SeedEvent = {
         type: 'subagent/descriptor',
-        seq: inheritance.seed.length,
+        seq: cut + 1,
         time: Date.now(),
         data: descriptor as unknown as Record<string, unknown>,
       }
-      const seed = [...inheritance.seed, descriptorEvent]
+      const seed = [...inheritance.seed, cutMarker, descriptorEvent]
       // Fork-marker fields (the exact shape the host's own session.fork uses,
       // api-session-controller): without `isSeeded` + `inheritedEventCount` the
       // session treats the whole seed as the child's OWN events, so the child's
@@ -610,7 +622,7 @@ export function buildSidechatApi(ctx: Context, live?: AssistantLiveBuffer): Side
         // stamp, so importing the value aborts the whole host half at load time.
         // `Array#length` is a non-negative safe integer by construction — exactly
         // what the upstream stamp asserts — so the cast is lossless here.
-        inheritedEventCount: seed.length as SessionLogOffset,
+        inheritedEventCount: cut as SessionLogOffset,
         agentOptions: childAgentOptions,
         setup,
         signal: AbortSignal.timeout(CREATE_TIMEOUT_MS),
