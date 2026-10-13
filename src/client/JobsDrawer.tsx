@@ -150,6 +150,7 @@ export function JobsDrawer(props: JobsDrawerProps): ReactNode {
               : (job.finishedAt ?? job.startedAt) - job.startedAt
             const secondary = [
               ...(multiOwner ? [row.ownerTitle] : []),
+              ...(live && job.progress !== undefined && job.progress !== '' ? [job.progress] : []),
               ...(job.detail !== undefined && job.detail !== '' ? [job.detail] : []),
               formatJobDuration(elapsed, t),
             ].filter(Boolean).join(' · ')
